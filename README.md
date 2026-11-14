@@ -1,34 +1,27 @@
-# aur-bot 🤖
+# aur-bot
 
-Automated, security-hardened Arch User Repository (AUR) package updater bot.
+Automated package updater for the Arch User Repository (AUR). Tracks upstream releases, updates PKGBUILDs and integrity checksums, and publishes releases on a schedule.
 
-Maintains and publishes updates for AUR packages whenever new upstream releases are detected.
+## Managed Packages
 
----
-
-## 📦 Managed Packages
-
-| Package | Type | Upstream Repository | Description |
+| Package | Type | Upstream | Description |
 |---|---|---|---|
 | [`goose-desktop-bin`](https://aur.archlinux.org/packages/goose-desktop-bin) | Binary (`.deb` + Vulkan CLI) | [aaif-goose/goose](https://github.com/aaif-goose/goose) | Prebuilt Goose Desktop & Vulkan CLI |
-| [`goose-desktop`](https://aur.archlinux.org/packages/goose-desktop) | Source | [aaif-goose/goose](https://github.com/aaif-goose/goose) | Goose Desktop built from source |
+| [`goose-desktop`](https://aur.archlinux.org/packages/goose-desktop) | Source | [aaif-goose/goose](https://github.com/aaif-goose/goose) | Goose Desktop compiled from source |
 
----
+## How It Works
 
-## 🔒 Security Architecture
+The update engine (`scripts/updater.py`) runs periodically via GitHub Actions:
 
-1. **Memory-Safe Deserialization (No `jq`):** Built with pure Python standard library (`json.loads`), completely avoiding `jq` expression injection and C parser CVEs.
-2. **Strict SemVer Sanitization:** Upstream tags are validated with a strict regex (`^[0-9]+(\.[0-9]+)+$`) before touching any files or commands, preventing command injection.
-3. **No Shell Invocations (`shell=False`):** All subprocess calls (`updpkgsums`, `makepkg`, `git`) use explicit argument lists without invoking shell interpreters.
-4. **Asset Verification:** Binary packages verify that all expected release assets exist upstream on GitHub before attempting to update `PKGBUILD`.
-5. **Atomic Rollback:** Backups of `PKGBUILD` are automatically restored if checksum generation or `.SRCINFO` creation fails.
-6. **Hardened SSH Key Handling:** Deploy keys are scoped to the AUR, saved with `600` permissions, and use host-key verification to prevent MITM attacks.
+1. Queries the GitHub Releases API for new upstream versions.
+2. Validates release tags and verifies required binary assets exist before modifying files.
+3. Updates `pkgver`, resets `pkgrel=1`, and recalculates source hashes using `updpkgsums`.
+4. Regenerates `.SRCINFO` metadata via `makepkg --printsrcinfo`.
+5. Pushes verified changes to the corresponding AUR repositories over SSH.
 
----
+## Configuration
 
-## ⚙️ Configuration (`scripts/packages.json`)
-
-To add a new package, simply add an entry to `scripts/packages.json`:
+Package targets are defined in `scripts/packages.json`:
 
 ```json
 {
@@ -42,27 +35,23 @@ To add a new package, simply add an entry to `scripts/packages.json`:
 }
 ```
 
-Then copy the initial `PKGBUILD` and `.SRCINFO` into `packages/my-package-bin/`.
+To track a new package, add its entry to `packages.json` and place its initial `PKGBUILD` and `.SRCINFO` in `packages/<name>/`.
 
----
-
-## 🚀 Running Locally
+## Local Usage
 
 ```bash
-# Check status of all packages without making changes
+# Check status without applying changes
 ./scripts/updater.py --check-only
 
-# Check a specific package
+# Check a single package
 ./scripts/updater.py --package goose-desktop-bin --check-only
 
-# Apply updates locally (requires pacman-contrib installed)
+# Apply updates locally (requires pacman-contrib)
 ./scripts/updater.py
 ```
 
----
+## Setup
 
-## 🔑 GitHub Actions Setup
+Configure the following secret in your repository (**Settings → Secrets and variables → Actions**):
 
-In your GitHub repository settings (**Settings → Secrets and variables → Actions**), add:
-
-* **`AUR_SSH_PRIVATE_KEY`**: Your private SSH key (without passphrase) paired with the public key on your [AUR Account](https://aur.archlinux.org/account/).
+* `AUR_SSH_PRIVATE_KEY`: Private SSH key registered with your [AUR account](https://aur.archlinux.org/account/).
