@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# AUR & Pacman build artifacts
+*.bak
+*.deb
+*.tar.bz2
+*.tar.gz
+*.tar.zst
+/packages/*/src/
+/packages/*/pkg/
+
+# CI / Runtime artifacts
+updated.txt
+.DS_Store

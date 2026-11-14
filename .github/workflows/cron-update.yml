@@ -1,0 +1,80 @@
+name: aur-bot Auto-Update
+
+on:
+  schedule:
+    # Run every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+
+jobs:
+  check-and-update:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+
+    steps:
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm --needed git openssh pacman-contrib sudo python
+
+      - name: Checkout aur-bot repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up unprivileged builder user for makepkg
+        run: |
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Run updater engine
+        run: |
+          su builder -c "python3 scripts/updater.py --output-updated updated.txt"
+
+      - name: Publish updated packages to AUR and GitHub
+        env:
+          AUR_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          if [ ! -s updated.txt ]; then
+            echo "No packages were updated. Exiting cleanly."
+            exit 0
+          fi
+
+          UPDATED_PKGS=$(cat updated.txt)
+          echo "Updated packages: $UPDATED_PKGS"
+
+          # Setup SSH for AUR pushes
+          mkdir -p ~/.ssh
+          echo "$AUR_KEY" > ~/.ssh/aur_key
+          chmod 600 ~/.ssh/aur_key
+          ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
+
+          # Setup Git Author
+          git config --global user.name "aur-bot"
+          git config --global user.email "sheikhlimon404@gmail.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+          # Push each updated package directly to the AUR
+          for pkg in $UPDATED_PKGS; do
+            echo "--> Publishing $pkg to AUR..."
+            VERSION=$(grep '^pkgver=' "packages/$pkg/PKGBUILD" | cut -d'=' -f2)
+            RELEASE=$(grep '^pkgrel=' "packages/$pkg/PKGBUILD" | cut -d'=' -f2)
+
+            CLONE_DIR="/tmp/aur-$pkg"
+            GIT_SSH_COMMAND="ssh -i ~/.ssh/aur_key -o StrictHostKeyChecking=yes" git clone "ssh://aur@aur.archlinux.org/${pkg}.git" "$CLONE_DIR"
+
+            cp "packages/$pkg/PKGBUILD" "packages/$pkg/.SRCINFO" "$CLONE_DIR/"
+            cd "$CLONE_DIR"
+            git add PKGBUILD .SRCINFO
+            git commit -m "upgpkg: ${VERSION}-${RELEASE}" || true
+            GIT_SSH_COMMAND="ssh -i ~/.ssh/aur_key -o StrictHostKeyChecking=yes" git push origin master
+            cd "$GITHUB_WORKSPACE"
+            rm -rf "$CLONE_DIR"
+          done
+
+          # Push updated packages back to GitHub
+          echo "--> Syncing changes to aur-bot GitHub repository..."
+          git add packages/
+          git commit -m "chore(auto): updated packages: $UPDATED_PKGS" || true
+          git push origin HEAD:main || git push origin HEAD:master || true

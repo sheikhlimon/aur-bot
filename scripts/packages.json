@@ -1,0 +1,18 @@
+[
+  {
+    "name": "goose-desktop-bin",
+    "upstream": "aaif-goose/goose",
+    "type": "bin",
+    "assets": [
+      "goose_{version}_amd64-vulkan.deb",
+      "goose-x86_64-unknown-linux-gnu-vulkan.tar.bz2"
+    ],
+    "aur_repo": "ssh://aur@aur.archlinux.org/goose-desktop-bin.git"
+  },
+  {
+    "name": "goose-desktop",
+    "upstream": "aaif-goose/goose",
+    "type": "source",
+    "aur_repo": "ssh://aur@aur.archlinux.org/goose-desktop.git"
+  }
+]
