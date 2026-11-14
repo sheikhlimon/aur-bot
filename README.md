@@ -50,6 +50,17 @@ To track a new package, add its entry to `packages.json` and place its initial `
 ./scripts/updater.py
 ```
 
+## Manual Patches & GitOps
+
+To fix or patch a package manually:
+1. Edit `packages/<name>/PKGBUILD` and bump `pkgrel`.
+2. Commit and push to `main`:
+   ```bash
+   git commit -am "fix(<name>): apply packaging patch"
+   git push origin main
+   ```
+GitHub Actions will automatically validate the `PKGBUILD`, regenerate `.SRCINFO`, and publish the release directly to the AUR.
+
 ## Setup
 
 Configure the following secret in your repository (**Settings → Secrets and variables → Actions**):

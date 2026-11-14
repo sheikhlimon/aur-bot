@@ -1,0 +1,96 @@
+name: Deploy Package Changes to AUR
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'packages/**'
+
+jobs:
+  deploy-to-aur:
+    name: Validate and Deploy to AUR
+    # Skip runs triggered by the automated cron bot commit
+    if: "!startsWith(github.event.head_commit.message, 'chore(auto):')"
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+
+    steps:
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm --needed git openssh pacman-contrib sudo
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Set up unprivileged builder user for makepkg
+        run: |
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Detect modified packages
+        id: detect
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          CHANGED_DIRS=$(git diff --name-only HEAD~1 HEAD | grep '^packages/' | cut -d/ -f2 | sort -u || true)
+          echo "Detected changed packages: $CHANGED_DIRS"
+          echo "pkgs=$CHANGED_DIRS" >> "$GITHUB_OUTPUT"
+
+      - name: Validate and Publish to AUR
+        env:
+          AUR_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          CHANGED_PKGS: ${{ steps.detect.outputs.pkgs }}
+        run: |
+          if [ -z "$CHANGED_PKGS" ]; then
+            echo "No packages changed. Exiting cleanly."
+            exit 0
+          fi
+
+          # Setup SSH for AUR pushes
+          mkdir -p ~/.ssh
+          echo "$AUR_KEY" > ~/.ssh/aur_key
+          chmod 600 ~/.ssh/aur_key
+          ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
+
+          # Setup Git Author
+          git config --global user.name "aur-bot"
+          git config --global user.email "sheikhlimon404@gmail.com"
+
+          for pkg in $CHANGED_PKGS; do
+            PKG_DIR="packages/$pkg"
+            if [ ! -f "$PKG_DIR/PKGBUILD" ]; then
+              echo "Skipping $pkg: PKGBUILD not found."
+              continue
+            fi
+
+            echo "--> Validating $pkg PKGBUILD and regenerating .SRCINFO..."
+            # Run makepkg --printsrcinfo as unprivileged user to ensure PKGBUILD syntax is valid
+            su builder -c "cd '$PKG_DIR' && makepkg --printsrcinfo > .SRCINFO"
+
+            VERSION=$(grep '^pkgver=' "$PKG_DIR/PKGBUILD" | cut -d'=' -f2)
+            RELEASE=$(grep '^pkgrel=' "$PKG_DIR/PKGBUILD" | cut -d'=' -f2)
+
+            echo "--> Publishing $pkg (${VERSION}-${RELEASE}) to AUR..."
+            CLONE_DIR="/tmp/aur-$pkg"
+            GIT_SSH_COMMAND="ssh -i ~/.ssh/aur_key -o StrictHostKeyChecking=yes" git clone "ssh://aur@aur.archlinux.org/${pkg}.git" "$CLONE_DIR"
+
+            # Copy all files from package folder (PKGBUILD, .SRCINFO, patches, etc.)
+            cp -r "$PKG_DIR"/* "$CLONE_DIR/"
+            [ -f "$PKG_DIR/.SRCINFO" ] && cp "$PKG_DIR/.SRCINFO" "$CLONE_DIR/"
+
+            cd "$CLONE_DIR"
+            git add .
+            if git diff --staged --quiet; then
+              echo "No diff between $PKG_DIR and AUR repository. Skipping push."
+            else
+              git commit -m "upgpkg: ${VERSION}-${RELEASE}"
+              GIT_SSH_COMMAND="ssh -i ~/.ssh/aur_key -o StrictHostKeyChecking=yes" git push origin master
+              echo "Successfully pushed $pkg to AUR!"
+            fi
+            cd "$GITHUB_WORKSPACE"
+            rm -rf "$CLONE_DIR"
+          done
